@@ -37,7 +37,7 @@ async function startBot() {
 
     // Prompt for phone number if not registered
     if (!state.creds.registered) {
-        const phoneNumber = "233559871135";
+        const phoneNumber = process.env.PHONE_NUMBER || "233559871135";
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(phoneNumber);
