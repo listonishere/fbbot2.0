@@ -38,6 +38,13 @@ const AuthSchema = new mongoose.Schema({
 });
 const Auth = mongoose.model("Auth", AuthSchema);
 
+// MongoDB Schema for Settings
+const SettingSchema = new mongoose.Schema({
+    key: { type: String, unique: true },
+    value: String
+});
+const Setting = mongoose.model("Setting", SettingSchema);
+
 // Custom Auth Provider for MongoDB
 async function useMongoDBAuthState() {
     const writeData = async (data, id) => {
@@ -122,9 +129,24 @@ async function startBot() {
     });
 
     if (!state.creds.registered) {
-        const phoneNumber = process.env.PHONE_NUMBER || "233559871135";
+        let phoneNumber = process.env.PHONE_NUMBER || "233559871135";
+        
+        // Try to get phone number from database
+        try {
+            const storedPhone = await Setting.findOne({ key: "phoneNumber" });
+            if (storedPhone) {
+                phoneNumber = storedPhone.value;
+                addLog(`Using stored phone number: ${phoneNumber}`);
+            } else {
+                addLog(`Using default phone number: ${phoneNumber}`);
+            }
+        } catch (e) {
+            addLog("Error reading phone number from DB: " + e.message);
+        }
+
         setTimeout(async () => {
             try {
+                addLog(`Requesting pairing code for ${phoneNumber}...`);
                 const code = await sock.requestPairingCode(phoneNumber);
                 currentPairingCode = code;
                 io.emit("pairing_code", code);
@@ -214,9 +236,14 @@ async function startBot() {
     });
 
     app.post("/api/reset", async (req, res) => {
+        const { phoneNumber } = req.body;
         addLog("Reset requested from Dashboard...");
         try {
             await Auth.deleteMany({});
+            if (phoneNumber) {
+                await Setting.findOneAndUpdate({ key: "phoneNumber" }, { value: phoneNumber }, { upsert: true });
+                addLog(`Phone number updated to ${phoneNumber}.`);
+            }
             addLog("Database cleared. Bot will restart in 2 seconds.");
             res.status(200).send("Session reset.");
             setTimeout(() => process.exit(0), 2000); // Small delay to send response before exit

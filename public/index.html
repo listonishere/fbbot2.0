@@ -48,13 +48,20 @@
                         <span>Baileys + vt-dlp</span>
                     </div>
                 </div>
-                <button onclick="resetSession()" class="w-full py-3 bg-red-500/20 hover:bg-red-500/30 text-red-500 font-bold rounded-xl transition-all border border-red-500/30">
-                    Switch New Number
-                </button>
+                <div class="space-y-4 pt-4">
+                    <div class="space-y-1">
+                        <label class="text-xs text-slate-500 uppercase font-bold px-1">Pairing Phone Number</label>
+                        <input type="text" id="phone-input" placeholder="e.g. 233559871135" class="w-full bg-slate-900/50 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500/50 transition-all">
+                    </div>
+                    <button onclick="resetSession()" class="w-full py-3 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 font-bold rounded-xl transition-all border border-blue-500/30">
+                        Switch New Number
+                    </button>
+                    <p class="text-[10px] text-center text-slate-500">Wait 5-10 seconds after clicking for the code to appear.</p>
+                </div>
             </div>
 
             <!-- Logs -->
-            <div class="glass rounded-2xl p-6 flex flex-col h-[300px]">
+            <div class="glass rounded-2xl p-6 flex flex-col h-[350px]">
                 <h3 class="text-lg font-semibold text-blue-400 mb-4">Live Logs</h3>
                 <div id="logs-container" class="flex-1 overflow-y-auto space-y-2 text-xs font-mono scroll-smooth">
                     <!-- Logs will appear here -->
@@ -70,6 +77,7 @@
         const pairingSection = document.getElementById("pairing-section");
         const pairingCode = document.getElementById("pairing-code");
         const logsContainer = document.getElementById("logs-container");
+        const phoneInput = document.getElementById("phone-input");
 
         socket.on("status_update", (status) => {
             statusText.innerText = status;
@@ -99,10 +107,29 @@
             `).join("");
         });
 
-        function resetSession() {
-            if (confirm("Are you sure you want to switch numbers? This will disconnect the bot.")) {
-                // We'll need a backend endpoint for this
-                fetch("/api/reset", { method: "POST" });
+        async function resetSession() {
+            const phoneNumber = phoneInput.value.trim();
+            if (!phoneNumber) {
+                alert("Please enter a phone number first.");
+                return;
+            }
+
+            if (confirm(`Are you sure you want to switch to ${phoneNumber}? This will disconnect the current bot and clear the session.`)) {
+                try {
+                    const response = await fetch("/api/reset", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ phoneNumber })
+                    });
+                    if (response.ok) {
+                        alert("Resetting... The dashboard will reload and generate a new code shortly.");
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        alert("Error resetting session.");
+                    }
+                } catch (e) {
+                    alert("Network error. Please try again.");
+                }
             }
         }
     </script>
