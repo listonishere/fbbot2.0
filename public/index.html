@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        .glow-green { box-shadow: 0 0 15px #10b981; }
+        .glow-red { box-shadow: 0 0 15px #ef4444; }
+        .pairing-font { font-family: 'Orbitron', sans-serif; letter-spacing: 0.2rem; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="max-w-4xl w-full glass rounded-3xl p-8 space-y-8">
+        <!-- Header -->
+        <div class="flex justify-between items-center">
+            <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">Bot Dashboard</h1>
+            <div id="status-indicator" class="flex items-center space-x-2 px-4 py-2 rounded-full glass">
+                <div id="status-dot" class="w-3 h-3 rounded-full bg-red-500"></div>
+                <span id="status-text" class="font-semibold text-sm">Offline</span>
+            </div>
+        </div>
+
+        <!-- Pairing Code Section -->
+        <div id="pairing-section" class="hidden glass rounded-2xl p-6 text-center space-y-4">
+            <h2 class="text-blue-400 font-semibold">PAIRED ACTION REQUIRED</h2>
+            <p class="text-sm text-gray-400 text-slate-400">Enter this code on your device to link the bot:</p>
+            <div id="pairing-code" class="text-5xl font-bold pairing-font py-4 text-white">---- ----</div>
+        </div>
+
+        <!-- Main Content Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Stats -->
+            <div class="glass rounded-2xl p-6 space-y-4">
+                <h3 class="text-lg font-semibold text-purple-400">Settings & Info</h3>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between border-b border-white/10 pb-2">
+                        <span class="text-slate-400">Uptime</span>
+                        <span id="uptime">Loading...</span>
+                    </div>
+                    <div class="flex justify-between border-b border-white/10 pb-2">
+                        <span class="text-slate-400">Engine</span>
+                        <span>Baileys + vt-dlp</span>
+                    </div>
+                </div>
+                <button onclick="resetSession()" class="w-full py-3 bg-red-500/20 hover:bg-red-500/30 text-red-500 font-bold rounded-xl transition-all border border-red-500/30">
+                    Switch New Number
+                </button>
+            </div>
+
+            <!-- Logs -->
+            <div class="glass rounded-2xl p-6 flex flex-col h-[300px]">
+                <h3 class="text-lg font-semibold text-blue-400 mb-4">Live Logs</h3>
+                <div id="logs-container" class="flex-1 overflow-y-auto space-y-2 text-xs font-mono scroll-smooth">
+                    <!-- Logs will appear here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const statusDot = document.getElementById("status-dot");
+        const statusText = document.getElementById("status-text");
+        const pairingSection = document.getElementById("pairing-section");
+        const pairingCode = document.getElementById("pairing-code");
+        const logsContainer = document.getElementById("logs-container");
+
+        socket.on("status_update", (status) => {
+            statusText.innerText = status;
+            if (status === "Online") {
+                statusDot.className = "w-3 h-3 rounded-full bg-green-500 glow-green";
+                pairingSection.classList.add("hidden");
+            } else {
+                statusDot.className = "w-3 h-3 rounded-full bg-red-500 glow-red";
+            }
+        });
+
+        socket.on("pairing_code", (code) => {
+            if (code) {
+                pairingSection.classList.remove("hidden");
+                pairingCode.innerText = code;
+            } else {
+                pairingSection.classList.add("hidden");
+            }
+        });
+
+        socket.on("log_update", (logs) => {
+            logsContainer.innerHTML = logs.map(log => `
+                <div class="border-l-2 border-blue-500/30 pl-2 py-1">
+                    <span class="text-slate-500">[${log.time}]</span>
+                    <span class="text-slate-200">${log.message}</span>
+                </div>
+            `).join("");
+        });
+
+        function resetSession() {
+            if (confirm("Are you sure you want to switch numbers? This will disconnect the bot.")) {
+                // We'll need a backend endpoint for this
+                fetch("/api/reset", { method: "POST" });
+            }
+        }
+    </script>
+</body>
+</html>
