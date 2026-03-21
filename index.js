@@ -26,7 +26,7 @@ let recentLogs = [];
 function addLog(message) {
     const log = { time: new Date().toLocaleTimeString(), message };
     recentLogs.unshift(log);
-    if (recentLogs.length => 20) recentLogs.pop();
+    if (recentLogs.length >= 20) recentLogs.pop();
     io.emit("log_update", recentLogs);
     console.log(`[${log.time}] ${message}`);
 }
@@ -170,21 +170,37 @@ async function startBot() {
             const filePath = path.join(__dirname, fileName);
             const ytDlpPath = process.platform === 'win32' ? '.\\yt-dlp.exe' : 'yt-dlp';
             
-            // OPTIMIZED yt-dlp flags for faster cloud performance
-            const command = `${ytDlpPath} -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --no-playlist --merge-output-format mp4 -o "${filePath}" "${url}"`;
+            // WHATSAPP COMPATIBLE yt-dlp flags (H.264 + AAC + YUV420P)
+            const command = `${ytDlpPath} -f "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4]/best" --no-playlist --merge-output-format mp4 --postprocessor-args "ffmpeg:-vcodec libx264 -acodec aac -pix_fmt yuv420p" -o "${filePath}" "${url}"`;
 
             exec(command, async (error) => {
                 if (error) {
                     addLog(`Error downloading: ${error.message}`);
-                    await sock.sendMessage(from, { text: "❌ Oops! Something went wrong with that link." });
-                } else if (fs.existsSync(filePath)) {
-                    try {
-                        const buffer = fs.readFileSync(filePath);
-                        await sock.sendMessage(from, { video: buffer, caption: "✅ Done!" });
-                        addLog(`Video sent to ${from}`);
-                        fs.unlinkSync(filePath);
-                    } catch (e) {
-                        addLog("Send error: " + e.message);
+                    await sock.sendMessage(from, { text: "❌ High-quality download failed. Trying low quality..." });
+                    
+                    // Fallback to simpler format if high-quality fails
+                    const fallbackCmd = `${ytDlpPath} -f "mp4" --no-playlist -o "${filePath}" "${url}"`;
+                    exec(fallbackCmd, async (e2) => {
+                        if (e2) {
+                             await sock.sendMessage(from, { text: "❌ Link invalid or private." });
+                        } else {
+                            handleSend();
+                        }
+                    });
+                } else {
+                    handleSend();
+                }
+
+                async function handleSend() {
+                    if (fs.existsSync(filePath)) {
+                        try {
+                            const buffer = fs.readFileSync(filePath);
+                            await sock.sendMessage(from, { video: buffer, caption: "✅ Here is your video!" });
+                            addLog(`Video sent to ${from}`);
+                            fs.unlinkSync(filePath);
+                        } catch (e) {
+                            addLog("Send error: " + e.message);
+                        }
                     }
                 }
             });
@@ -198,10 +214,16 @@ async function startBot() {
     });
 
     app.post("/api/reset", async (req, res) => {
-        await Auth.deleteMany({});
-        addLog("Full session reset. Restarting...");
-        res.status(200).send("Session reset.");
-        process.exit(0);
+        addLog("Reset requested from Dashboard...");
+        try {
+            await Auth.deleteMany({});
+            addLog("Database cleared. Bot will restart in 2 seconds.");
+            res.status(200).send("Session reset.");
+            setTimeout(() => process.exit(0), 2000); // Small delay to send response before exit
+        } catch (err) {
+            console.error(err);
+            res.status(500).send("Error resetting session.");
+        }
     });
 }
 
