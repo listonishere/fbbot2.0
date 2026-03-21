@@ -15,6 +15,17 @@ const io = new Server(httpServer);
 app.use(express.static("public"));
 app.use(express.json());
 
+// Global Error Catchers
+process.on("unhandledRejection", (reason, promise) => {
+    console.error("Unhandled Rejection at:", promise, "reason:", reason);
+    addLog("Unhandled Rejection: " + reason);
+});
+
+process.on("uncaughtException", (err) => {
+    console.error("Uncaught Exception:", err);
+    addLog("Uncaught Exception: " + err.message);
+});
+
 const PORT = process.env.PORT || 8080;
 const MONGO_URL = process.env.MONGO_URL || "mongodb+srv://blvck_db_user:kt4kdnltgkbIUngs@cluster0.ofzc3yh.mongodb.net/?appName=Cluster0";
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || `https://myfbbot2.onrender.com`; // Update with your actual URL
@@ -47,25 +58,34 @@ const Setting = mongoose.model("Setting", SettingSchema);
 
 // Custom Auth Provider for MongoDB
 async function useMongoDBAuthState() {
-    const writeData = async (data, id) => {
-        const json = JSON.stringify(data);
-        await Auth.findOneAndUpdate({ id }, { data: json }, { upsert: true });
-    };
+    const b = await import("@whiskeysockets/baileys");
+    const { BufferJSON } = b;
 
     const readData = async (id) => {
-        const res = await Auth.findOne({ id });
-        return res ? JSON.parse(res.data) : null;
+        try {
+            const res = await Auth.findOne({ id });
+            return res ? JSON.parse(res.data, BufferJSON.revive) : null;
+        } catch (e) {
+            return null;
+        }
+    };
+
+    const writeData = async (data, id) => {
+        try {
+            const json = JSON.stringify(data, BufferJSON.replacer);
+            await Auth.findOneAndUpdate({ id }, { data: json }, { upsert: true });
+        } catch (e) {}
     };
 
     const removeData = async (id) => {
-        await Auth.deleteOne({ id });
+        try {
+            await Auth.deleteOne({ id });
+        } catch (e) {}
     };
 
     let creds = await readData("creds");
     if (!creds) {
-        creds = (await import("@whiskeysockets/baileys")).BufferJSON.reviveJSON(
-            JSON.parse(JSON.stringify((await import("@whiskeysockets/baileys")).initAuthCreds()))
-        );
+        creds = b.initAuthCreds();
         await writeData(creds, "creds");
     }
 
@@ -79,7 +99,7 @@ async function useMongoDBAuthState() {
                         ids.map(async (id) => {
                             let value = await readData(`${type}-${id}`);
                             if (type === 'app-state-sync-key' && value) {
-                                value = (await import("@whiskeysockets/baileys")).proto.Message.AppStateSyncKeyData.fromObject(value);
+                                value = b.proto.Message.AppStateSyncKeyData.fromObject(value);
                             }
                             data[id] = value;
                         })
@@ -106,6 +126,11 @@ async function useMongoDBAuthState() {
 
 async function startBot() {
     try {
+        mongoose.connection.on("error", (err) => {
+            console.error("Mongoose connection error:", err);
+            addLog("Mongoose error: " + err.message);
+        });
+        
         await mongoose.connect(MONGO_URL);
         addLog("Connected to MongoDB for Session Storage.");
     } catch (err) {
@@ -113,7 +138,8 @@ async function startBot() {
         return;
     }
 
-    const b = await import("@whiskeysockets/baileys");
+    try {
+        const b = await import("@whiskeysockets/baileys");
     const makeWASocket = b.default || b;
     const { DisconnectReason, fetchLatestBaileysVersion } = b;
 
@@ -234,25 +260,29 @@ async function startBot() {
         socket.emit("pairing_code", currentPairingCode);
         socket.emit("log_update", recentLogs);
     });
-
-    app.post("/api/reset", async (req, res) => {
-        const { phoneNumber } = req.body;
-        addLog("Reset requested from Dashboard...");
-        try {
-            await Auth.deleteMany({});
-            if (phoneNumber) {
-                await Setting.findOneAndUpdate({ key: "phoneNumber" }, { value: phoneNumber }, { upsert: true });
-                addLog(`Phone number updated to ${phoneNumber}.`);
-            }
-            addLog("Database cleared. Bot will restart in 2 seconds.");
-            res.status(200).send("Session reset.");
-            setTimeout(() => process.exit(0), 2000); // Small delay to send response before exit
-        } catch (err) {
-            console.error(err);
-            res.status(500).send("Error resetting session.");
-        }
-    });
+    } catch (error) {
+        addLog("Fatal Bot Error: " + error.message);
+        console.error("Fatal Bot Error:", error);
+    }
 }
+
+app.post("/api/reset", async (req, res) => {
+    const { phoneNumber } = req.body;
+    addLog("Reset requested from Dashboard...");
+    try {
+        await Auth.deleteMany({});
+        if (phoneNumber) {
+            await Setting.findOneAndUpdate({ key: "phoneNumber" }, { value: phoneNumber }, { upsert: true });
+            addLog(`Phone number updated to ${phoneNumber}.`);
+        }
+        addLog("Database cleared. Bot will restart in 2 seconds.");
+        res.status(200).send("Session reset.");
+        setTimeout(() => process.exit(0), 2000); // Small delay to send response before exit
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error resetting session.");
+    }
+});
 
 // Self-pinger to prevent Render sleep
 setInterval(() => {
