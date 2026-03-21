@@ -5,6 +5,8 @@ const { exec } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
+const mongoose = require("mongoose");
+const axios = require("axios");
 
 const app = express();
 const httpServer = createServer(app);
@@ -14,6 +16,9 @@ app.use(express.static("public"));
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
+const MONGO_URL = process.env.MONGO_URL || "mongodb+srv://blvck_db_user:kt4kdnltgkbIUngs@cluster0.ofzc3yh.mongodb.net/?appName=Cluster0";
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || `https://myfbbot2.onrender.com`; // Update with your actual URL
+
 let botStatus = "Offline";
 let currentPairingCode = "";
 let recentLogs = [];
@@ -21,27 +26,96 @@ let recentLogs = [];
 function addLog(message) {
     const log = { time: new Date().toLocaleTimeString(), message };
     recentLogs.unshift(log);
-    if (recentLogs.length > 20) recentLogs.pop();
+    if (recentLogs.length => 20) recentLogs.pop();
     io.emit("log_update", recentLogs);
+    console.log(`[${log.time}] ${message}`);
+}
+
+// MongoDB Schema for Baileys Session
+const AuthSchema = new mongoose.Schema({
+    id: { type: String, unique: true },
+    data: String
+});
+const Auth = mongoose.model("Auth", AuthSchema);
+
+// Custom Auth Provider for MongoDB
+async function useMongoDBAuthState() {
+    const writeData = async (data, id) => {
+        const json = JSON.stringify(data);
+        await Auth.findOneAndUpdate({ id }, { data: json }, { upsert: true });
+    };
+
+    const readData = async (id) => {
+        const res = await Auth.findOne({ id });
+        return res ? JSON.parse(res.data) : null;
+    };
+
+    const removeData = async (id) => {
+        await Auth.deleteOne({ id });
+    };
+
+    let creds = await readData("creds");
+    if (!creds) {
+        creds = (await import("@whiskeysockets/baileys")).BufferJSON.reviveJSON(
+            JSON.parse(JSON.stringify((await import("@whiskeysockets/baileys")).initAuthCreds()))
+        );
+        await writeData(creds, "creds");
+    }
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(
+                        ids.map(async (id) => {
+                            let value = await readData(`${type}-${id}`);
+                            if (type === 'app-state-sync-key' && value) {
+                                value = (await import("@whiskeysockets/baileys")).proto.Message.AppStateSyncKeyData.fromObject(value);
+                            }
+                            data[id] = value;
+                        })
+                    );
+                    return data;
+                },
+                set: async (data) => {
+                    for (const type in data) {
+                        for (const id in data[type]) {
+                            const value = data[type][id];
+                            if (value) {
+                                await writeData(value, `${type}-${id}`);
+                            } else {
+                                await removeData(`${type}-${id}`);
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        saveCreds: () => writeData(creds, "creds")
+    };
 }
 
 async function startBot() {
+    try {
+        await mongoose.connect(MONGO_URL);
+        addLog("Connected to MongoDB for Session Storage.");
+    } catch (err) {
+        addLog("MongoDB Connection Error: " + err.message);
+        return;
+    }
+
     const b = await import("@whiskeysockets/baileys");
     const makeWASocket = b.default || b;
-    const { 
-        useMultiFileAuthState, 
-        DisconnectReason, 
-        fetchLatestBaileysVersion, 
-        makeInMemoryStore 
-    } = b;
+    const { DisconnectReason, fetchLatestBaileysVersion } = b;
 
-    const logger = pino({ level: 'silent' });
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const { state, saveCreds } = await useMongoDBAuthState();
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
-        logger,
+        logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
         auth: state,
         browser: ["Ubuntu", "Chrome", "20.0.04"]
@@ -56,9 +130,9 @@ async function startBot() {
                 io.emit("pairing_code", code);
                 addLog(`Pairing code generated for ${phoneNumber}: ${code}`);
             } catch (err) {
-                console.error("Error requesting pairing code:", err);
+                addLog("Pairing error: " + err.message);
             }
-        }, 3000);
+        }, 5000);
     }
 
     sock.ev.on('connection.update', (update) => {
@@ -66,15 +140,15 @@ async function startBot() {
         if (connection === 'close') {
             botStatus = "Offline";
             io.emit("status_update", botStatus);
-            addLog("Connection closed. Reconnecting...");
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startBot();
+            if (shouldReconnect) {
+                addLog("Reconnecting...");
+                startBot();
+            }
         } else if (connection === 'open') {
             botStatus = "Online";
-            currentPairingCode = "";
             io.emit("status_update", botStatus);
-            io.emit("pairing_code", "");
-            addLog("Bot is Online!");
+            addLog("Bot is now ONLINE and permanent!");
         }
     });
 
@@ -87,69 +161,56 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
-        if (text.includes('facebook.com') || text.includes('fb.watch')) {
-            const urlMatch = text.match(/https?:\/\/[^\s]+/);
-            if (!urlMatch) return;
-            const url = urlMatch[0];
-
-            addLog(`Received link from ${from}: ${url}`);
-            await sock.sendMessage(from, { text: "Downloading video... please wait." });
+        if (text.match(/https?:\/\/(www\.)?(facebook\.com|fb\.watch)/)) {
+            const url = text.match(/https?:\/\/[^\s]+/)[0];
+            addLog(`Link received: ${url}`);
+            await sock.sendMessage(from, { text: "📥 Downloading video... using high-speed servers." });
 
             const fileName = `video_${Date.now()}.mp4`;
             const filePath = path.join(__dirname, fileName);
             const ytDlpPath = process.platform === 'win32' ? '.\\yt-dlp.exe' : 'yt-dlp';
-            const command = `${ytDlpPath} -o "${filePath}" "${url}"`;
+            
+            // OPTIMIZED yt-dlp flags for faster cloud performance
+            const command = `${ytDlpPath} -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --no-playlist --merge-output-format mp4 -o "${filePath}" "${url}"`;
 
             exec(command, async (error) => {
                 if (error) {
-                    addLog(`Download error for ${url}`);
-                    await sock.sendMessage(from, { text: "Error downloading video." });
-                    return;
-                }
-
-                if (fs.existsSync(filePath)) {
+                    addLog(`Error downloading: ${error.message}`);
+                    await sock.sendMessage(from, { text: "❌ Oops! Something went wrong with that link." });
+                } else if (fs.existsSync(filePath)) {
                     try {
                         const buffer = fs.readFileSync(filePath);
-                        await sock.sendMessage(from, { video: buffer, caption: "Here is your video!" });
-                        addLog(`Successfully sent video to ${from}`);
+                        await sock.sendMessage(from, { video: buffer, caption: "✅ Done!" });
+                        addLog(`Video sent to ${from}`);
                         fs.unlinkSync(filePath);
-                    } catch (sendError) {
-                        addLog(`Send error for ${from}`);
-                        await sock.sendMessage(from, { text: "Error sending the video." });
+                    } catch (e) {
+                        addLog("Send error: " + e.message);
                     }
                 }
             });
         }
     });
 
-    // Socket.io listeners
     io.on("connection", (socket) => {
         socket.emit("status_update", botStatus);
         socket.emit("pairing_code", currentPairingCode);
         socket.emit("log_update", recentLogs);
     });
 
-    // API Endpoints
-    app.post("/api/reset", (req, res) => {
-        addLog("Reset requested from Dashboard...");
-        try {
-            // Delete auth folder (Caution: synchronous for simplicity)
-            if (fs.existsSync('auth_info_baileys')) {
-                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                addLog("Auth folder deleted. Bot will restart.");
-                res.status(200).send("Session reset. Bot will logout.");
-                process.exit(0); // Let the process manager (Render PM2/Docker) restart it
-            } else {
-                res.status(404).send("No session found.");
-            }
-        } catch (err) {
-            console.error(err);
-            res.status(500).send("Error resetting session.");
-        }
+    app.post("/api/reset", async (req, res) => {
+        await Auth.deleteMany({});
+        addLog("Full session reset. Restarting...");
+        res.status(200).send("Session reset.");
+        process.exit(0);
     });
 }
 
+// Self-pinger to prevent Render sleep
+setInterval(() => {
+    axios.get(RENDER_URL).then(() => addLog("Self-ping: Staying awake.")).catch(() => {});
+}, 10 * 60 * 1000); // Every 10 minutes
+
 httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server started on port ${PORT}`);
     startBot();
 });
