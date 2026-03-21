@@ -25,7 +25,7 @@ RUN npm install
 COPY . .
 
 # Expose port for health checks (Render, Koyeb, etc.)
-EXPOSE 8080
+EXPOSE 10000
 
 # Start the bot
 CMD ["node", "index.js"]

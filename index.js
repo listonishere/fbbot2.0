@@ -26,7 +26,8 @@ process.on("uncaughtException", (err) => {
     addLog("Uncaught Exception: " + err.message);
 });
 
-const PORT = process.env.PORT || 8080;
+// Render defaults to port 10000 if not specified
+const PORT = process.env.PORT || 10000;
 const MONGO_URL = process.env.MONGO_URL || "mongodb+srv://blvck_db_user:kt4kdnltgkbIUngs@cluster0.ofzc3yh.mongodb.net/?appName=Cluster0";
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || `https://myfbbot2.onrender.com`; // Update with your actual URL
 
@@ -293,3 +294,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server started on port ${PORT}`);
     startBot();
 });
+
+// Increase timeouts to prevent Render 502 errors
+httpServer.keepAliveTimeout = 120000;
+httpServer.headersTimeout = 120500;
