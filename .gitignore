@@ -1,10 +1,17 @@
 node_modules
 auth_info_baileys
+.wwebjs_auth
 yt-dlp.exe
 video_*.mp4
+video_*.mp4.part
+*.log
 .DS_Store
 error.log
 debug.js
 keys.txt
 .gemini
 package-lock.json
+final_check.log
+bot_output.log
+startup_error.log
+test_regex.js
