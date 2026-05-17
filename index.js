@@ -30,9 +30,11 @@ process.on("uncaughtException", (err) => {
 const PORT = process.env.PORT || 10000;
 const MONGO_URL = process.env.MONGO_URL || "mongodb+srv://blvck_db_user:kt4kdnltgkbIUngs@cluster0.ofzc3yh.mongodb.net/?appName=Cluster0";
 
+// Global state
 let botStatus = "Offline";
 let currentPairingCode = "";
 let recentLogs = [];
+let socketInstance = null;
 
 function addLog(message) {
     const log = { time: new Date().toLocaleTimeString(), message };
@@ -44,7 +46,6 @@ function addLog(message) {
 
 async function startBot() {
     try {
-        addLog("Connecting to MongoDB for session storage...");
         const { state, saveCreds } = await useMongoDBAuthState(MONGO_URL);
         
         const b = await import("@whiskeysockets/baileys");
@@ -53,7 +54,7 @@ async function startBot() {
 
         const { version } = await fetchLatestBaileysVersion();
 
-        const sock = makeWASocket({
+        socketInstance = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
@@ -66,25 +67,27 @@ async function startBot() {
             addLog(`Requesting pairing code for ${PHONE_NUMBER}...`);
             setTimeout(async () => {
                 try {
-                    const code = await sock.requestPairingCode(PHONE_NUMBER);
-                    currentPairingCode = code;
-                    io.emit("pairing_code", code);
-                    addLog(`Pairing code generated: ${code}`);
+                    if (socketInstance) {
+                        const code = await socketInstance.requestPairingCode(PHONE_NUMBER);
+                        currentPairingCode = code;
+                        io.emit("pairing_code", code);
+                        addLog(`Pairing code generated: ${code}`);
+                    }
                 } catch (err) {
                     addLog("Pairing error: " + err.message);
                 }
             }, 5000);
         }
 
-        sock.ev.on('connection.update', (update) => {
+        socketInstance.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect } = update;
             if (connection === 'close') {
                 botStatus = "Offline";
                 io.emit("status_update", botStatus);
                 const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
                 if (shouldReconnect) {
-                    addLog("Reconnecting...");
-                    startBot();
+                    addLog("Reconnecting in 5 seconds...");
+                    setTimeout(startBot, 5000);
                 }
             } else if (connection === 'open') {
                 botStatus = "Online";
@@ -93,9 +96,9 @@ async function startBot() {
             }
         });
 
-        sock.ev.on('creds.update', saveCreds);
+        socketInstance.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('messages.upsert', async ({ messages }) => {
+        socketInstance.ev.on('messages.upsert', async ({ messages }) => {
             const msg = messages[0];
             if (!msg.message || msg.key.fromMe) return;
             
@@ -107,7 +110,7 @@ async function startBot() {
                 if (!urlMatch) return;
                 const url = urlMatch[0];
                 addLog(`Processing link: ${url}`);
-                await sock.sendMessage(from, { text: "📥 Downloading video... please wait." });
+                await socketInstance.sendMessage(from, { text: "📥 Downloading video... please wait." });
 
                 const fileName = `video_${Date.now()}.mp4`;
                 const filePath = path.join(__dirname, fileName);
@@ -121,7 +124,7 @@ async function startBot() {
                         const fallbackCmd = `${ytDlpPath} -f "mp4" --no-playlist -o "${filePath}" "${url}"`;
                         exec(fallbackCmd, async (e2) => {
                             if (e2) {
-                                await sock.sendMessage(from, { text: "❌ Failed to download. Link might be private or invalid." });
+                                await socketInstance.sendMessage(from, { text: "❌ Failed to download. Link might be private or invalid." });
                             } else {
                                 await sendVideo();
                             }
@@ -133,9 +136,8 @@ async function startBot() {
                     async function sendVideo() {
                         if (fs.existsSync(filePath)) {
                             try {
-                                // Efficiently send video using stream
                                 const stream = fs.createReadStream(filePath);
-                                await sock.sendMessage(from, { 
+                                await socketInstance.sendMessage(from, { 
                                     video: { stream }, 
                                     caption: "✅ Video downloaded successfully!",
                                     mimetype: 'video/mp4'
@@ -151,16 +153,19 @@ async function startBot() {
             }
         });
 
-        io.on("connection", (socket) => {
-            socket.emit("status_update", botStatus);
-            socket.emit("pairing_code", currentPairingCode);
-            socket.emit("log_update", recentLogs);
-        });
     } catch (error) {
         addLog("Fatal Bot Error: " + error.message);
         console.error("Fatal Bot Error:", error);
+        setTimeout(startBot, 10000);
     }
 }
+
+io.on("connection", (socket) => {
+    socket.emit("status_update", botStatus);
+    socket.emit("pairing_code", currentPairingCode);
+    socket.emit("log_update", recentLogs);
+});
+
 
 app.post("/api/reset", async (req, res) => {
     const { phoneNumber } = req.body;
