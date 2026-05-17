@@ -36,6 +36,9 @@ let currentPairingCode = "";
 let recentLogs = [];
 let socketInstance = null;
 
+// Keep the process alive
+setInterval(() => {}, 1000 * 60 * 60); 
+
 function addLog(message) {
     const log = { time: new Date().toLocaleTimeString(), message };
     recentLogs.unshift(log);
@@ -212,7 +215,9 @@ app.post("/api/reset", async (req, res) => {
         await mongoose.connection.db.dropCollection('auths').catch(() => {});
         addLog("Session cleared. Restarting...");
         res.status(200).send("Session reset.");
-        setTimeout(() => process.exit(0), 2000);
+        
+        // Instead of exiting, we just trigger a restart of the bot
+        startBot();
     } catch (err) {
         res.status(500).send("Error resetting session.");
     }
