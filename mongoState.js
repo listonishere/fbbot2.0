@@ -61,18 +61,21 @@ async function useMongoDBAuthState(mongoUrl) {
     };
 
     const { state, saveCreds } = await (async () => {
-        let baileys;
-        try {
-            baileys = require('@whiskeysockets/baileys');
-        } catch (e) {
-            baileys = await import('@whiskeysockets/baileys');
-        }
+        const b = await import('@whiskeysockets/baileys');
         
-        const baileysMod = baileys.default || baileys;
-        const initCreds = baileysMod.initCreds;
+        // Find initCreds wherever it might be
+        let initCreds = b.initCreds;
+        let baileysMod = b;
+
+        if (!initCreds && b.default) {
+            initCreds = b.default.initCreds;
+            baileysMod = b.default;
+        }
 
         if (typeof initCreds !== 'function') {
-            throw new Error(`initCreds not found in Baileys export. Available keys: ${Object.keys(baileysMod).join(', ')}`);
+            const keys = Object.keys(b).join(', ');
+            const defaultKeys = b.default ? Object.keys(b.default).join(', ') : 'none';
+            throw new Error(`initCreds not found. Module keys: [${keys}], Default keys: [${defaultKeys}]`);
         }
 
         const creds = await readData('creds') || initCreds();
@@ -86,7 +89,11 @@ async function useMongoDBAuthState(mongoUrl) {
                             ids.map(async (id) => {
                                 let value = await readData(`${type}-${id}`);
                                 if (type === 'app-state-sync-key' && value) {
-                                    value = baileysMod.proto.Message.AppStateSyncKeyData.fromObject(value);
+                                    // Use the resolved module to access proto
+                                    const proto = b.proto || (b.default && b.default.proto);
+                                    if (proto) {
+                                        value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                                    }
                                 }
                                 data[id] = value;
                             })
