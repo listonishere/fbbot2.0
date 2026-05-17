@@ -51,14 +51,21 @@ async function startBot() {
             socketInstance.ev.removeAllListeners('connection.update');
             socketInstance.ev.removeAllListeners('creds.update');
             socketInstance.ev.removeAllListeners('messages.upsert');
-            socketInstance.end();
+            try { socketInstance.end(); } catch (e) {}
         }
 
         const { state, saveCreds } = await useMongoDBAuthState(MONGO_URL);
         
-        const b = await import("@whiskeysockets/baileys");
-        const makeWASocket = b.default || b;
-        const { DisconnectReason, fetchLatestBaileysVersion, Browsers } = b;
+        let baileys;
+        try {
+            baileys = require('@whiskeysockets/baileys');
+        } catch (e) {
+            baileys = await import('@whiskeysockets/baileys');
+        }
+        
+        const baileysMod = baileys.default || baileys;
+        const makeWASocket = baileysMod.default || baileysMod;
+        const { DisconnectReason, fetchLatestBaileysVersion, Browsers } = baileysMod;
 
         const { version } = await fetchLatestBaileysVersion();
 
@@ -99,6 +106,7 @@ async function startBot() {
 
         socketInstance.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect } = update;
+            console.log("Connection update:", update); // Added log
             if (connection === 'close') {
                 botStatus = "Offline";
                 io.emit("status_update", botStatus);
@@ -108,7 +116,10 @@ async function startBot() {
                 addLog(`Connection closed. Reason: ${statusCode || 'unknown'}. Reconnecting: ${shouldReconnect}`);
                 
                 if (shouldReconnect) {
-                    setTimeout(startBot, 5000);
+                    setTimeout(() => {
+                        addLog("Attempting reconnection...");
+                        startBot();
+                    }, 5000);
                 }
             } else if (connection === 'open') {
                 botStatus = "Online";

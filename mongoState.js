@@ -61,8 +61,20 @@ async function useMongoDBAuthState(mongoUrl) {
     };
 
     const { state, saveCreds } = await (async () => {
-        const b = await import('@whiskeysockets/baileys');
-        const initCreds = b.initCreds || (b.default && b.default.initCreds);
+        let baileys;
+        try {
+            baileys = require('@whiskeysockets/baileys');
+        } catch (e) {
+            baileys = await import('@whiskeysockets/baileys');
+        }
+        
+        const baileysMod = baileys.default || baileys;
+        const initCreds = baileysMod.initCreds;
+
+        if (typeof initCreds !== 'function') {
+            throw new Error(`initCreds not found in Baileys export. Available keys: ${Object.keys(baileysMod).join(', ')}`);
+        }
+
         const creds = await readData('creds') || initCreds();
         return {
             state: {
@@ -74,8 +86,7 @@ async function useMongoDBAuthState(mongoUrl) {
                             ids.map(async (id) => {
                                 let value = await readData(`${type}-${id}`);
                                 if (type === 'app-state-sync-key' && value) {
-                                    const b = await import('@whiskeysockets/baileys');
-                                    value = b.proto.Message.AppStateSyncKeyData.fromObject(value);
+                                    value = baileysMod.proto.Message.AppStateSyncKeyData.fromObject(value);
                                 }
                                 data[id] = value;
                             })
