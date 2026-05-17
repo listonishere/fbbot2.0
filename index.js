@@ -46,11 +46,19 @@ function addLog(message) {
 
 async function startBot() {
     try {
+        // Cleanup existing instance if any
+        if (socketInstance) {
+            socketInstance.ev.removeAllListeners('connection.update');
+            socketInstance.ev.removeAllListeners('creds.update');
+            socketInstance.ev.removeAllListeners('messages.upsert');
+            socketInstance.end();
+        }
+
         const { state, saveCreds } = await useMongoDBAuthState(MONGO_URL);
         
         const b = await import("@whiskeysockets/baileys");
         const makeWASocket = b.default || b;
-        const { DisconnectReason, fetchLatestBaileysVersion } = b;
+        const { DisconnectReason, fetchLatestBaileysVersion, Browsers } = b;
 
         const { version } = await fetchLatestBaileysVersion();
 
@@ -59,24 +67,34 @@ async function startBot() {
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
             auth: state,
-            browser: ["Ubuntu", "Chrome", "20.0.04"]
+            browser: Browsers.ubuntu('Chrome'),
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 0,
+            keepAliveIntervalMs: 10000
         });
 
         if (!state.creds.registered) {
             const PHONE_NUMBER = await getSetting("phone_number", process.env.PHONE_NUMBER || "233559871135");
-            addLog(`Requesting pairing code for ${PHONE_NUMBER}...`);
-            setTimeout(async () => {
+            
+            // Wait for connection to be active before requesting code
+            const requestPairing = async () => {
+                if (botStatus === "Online" || state.creds.registered) return;
                 try {
-                    if (socketInstance) {
-                        const code = await socketInstance.requestPairingCode(PHONE_NUMBER);
-                        currentPairingCode = code;
-                        io.emit("pairing_code", code);
-                        addLog(`Pairing code generated: ${code}`);
-                    }
+                    addLog(`Requesting pairing code for ${PHONE_NUMBER}...`);
+                    const code = await socketInstance.requestPairingCode(PHONE_NUMBER);
+                    currentPairingCode = code;
+                    io.emit("pairing_code", code);
+                    addLog(`Pairing code generated: ${code}`);
                 } catch (err) {
                     addLog("Pairing error: " + err.message);
+                    if (err.message.includes('Closed')) {
+                        addLog("Retrying pairing code request in 10s...");
+                        setTimeout(requestPairing, 10000);
+                    }
                 }
-            }, 5000);
+            };
+            
+            setTimeout(requestPairing, 10000);
         }
 
         socketInstance.ev.on('connection.update', (update) => {
@@ -84,13 +102,18 @@ async function startBot() {
             if (connection === 'close') {
                 botStatus = "Offline";
                 io.emit("status_update", botStatus);
-                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                addLog(`Connection closed. Reason: ${statusCode || 'unknown'}. Reconnecting: ${shouldReconnect}`);
+                
                 if (shouldReconnect) {
-                    addLog("Reconnecting in 5 seconds...");
                     setTimeout(startBot, 5000);
                 }
             } else if (connection === 'open') {
                 botStatus = "Online";
+                currentPairingCode = "";
+                io.emit("pairing_code", "");
                 io.emit("status_update", botStatus);
                 addLog("Bot is now ONLINE!");
             }
