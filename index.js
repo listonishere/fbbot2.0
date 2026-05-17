@@ -35,6 +35,8 @@ let botStatus = "Offline";
 let currentPairingCode = "";
 let recentLogs = [];
 let socketInstance = null;
+let downloadQueue = [];
+let isProcessingQueue = false;
 
 // Keep the process alive
 setInterval(() => {}, 1000 * 60 * 60); 
@@ -45,6 +47,70 @@ function addLog(message) {
     if (recentLogs.length >= 20) recentLogs.pop();
     io.emit("log_update", recentLogs);
     console.log(`[${log.time}] ${message}`);
+}
+
+async function processQueue() {
+    if (isProcessingQueue || downloadQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    while (downloadQueue.length > 0) {
+        const { from, url } = downloadQueue.shift();
+        addLog(`Processing queued link: ${url}`);
+        
+        try {
+            await socketInstance.sendMessage(from, { text: "📥 Currently downloading your video... (Queued)" });
+
+            const fileName = `video_${Date.now()}.mp4`;
+            const filePath = path.join(__dirname, fileName);
+            const ytDlpPath = process.platform === 'win32' ? '.\\yt-dlp.exe' : 'yt-dlp';
+            
+            const command = `${ytDlpPath} -f "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4]/best" --no-playlist --merge-output-format mp4 --postprocessor-args "ffmpeg:-vcodec libx264 -acodec aac -pix_fmt yuv420p" -o "${filePath}" "${url}"`;
+
+            await new Promise((resolve) => {
+                exec(command, async (error) => {
+                    if (error) {
+                        addLog(`Download error: ${error.message}`);
+                        const fallbackCmd = `${ytDlpPath} -f "mp4" --no-playlist -o "${filePath}" "${url}"`;
+                        exec(fallbackCmd, async (e2) => {
+                            if (e2) {
+                                await socketInstance.sendMessage(from, { text: "❌ Failed to download. Link might be private or invalid." });
+                            } else {
+                                await sendVideo();
+                            }
+                            resolve();
+                        });
+                    } else {
+                        await sendVideo();
+                        resolve();
+                    }
+
+                    async function sendVideo() {
+                        if (fs.existsSync(filePath)) {
+                            try {
+                                const stream = fs.createReadStream(filePath);
+                                await socketInstance.sendMessage(from, { 
+                                    video: { stream }, 
+                                    caption: "✅ Video downloaded successfully!",
+                                    mimetype: 'video/mp4'
+                                });
+                                addLog(`Video sent to ${from}`);
+                                fs.unlinkSync(filePath);
+                            } catch (e) {
+                                addLog("Send error: " + e.message);
+                            }
+                        }
+                    }
+                });
+            });
+        } catch (err) {
+            addLog("Queue processing error: " + err.message);
+        }
+        
+        // Brief pause between downloads to prevent resource spikes
+        await new Promise(r => setTimeout(r, 2000));
+    }
+
+    isProcessingQueue = false;
 }
 
 async function startBot() {
@@ -141,47 +207,15 @@ async function startBot() {
                 const urlMatch = text.match(/https?:\/\/[^\s]+/);
                 if (!urlMatch) return;
                 const url = urlMatch[0];
-                addLog(`Processing link: ${url}`);
-                await socketInstance.sendMessage(from, { text: "📥 Downloading video... please wait." });
-
-                const fileName = `video_${Date.now()}.mp4`;
-                const filePath = path.join(__dirname, fileName);
-                const ytDlpPath = process.platform === 'win32' ? '.\\yt-dlp.exe' : 'yt-dlp';
                 
-                const command = `${ytDlpPath} -f "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4]/best" --no-playlist --merge-output-format mp4 --postprocessor-args "ffmpeg:-vcodec libx264 -acodec aac -pix_fmt yuv420p" -o "${filePath}" "${url}"`;
-
-                exec(command, async (error) => {
-                    if (error) {
-                        addLog(`Download error: ${error.message}`);
-                        const fallbackCmd = `${ytDlpPath} -f "mp4" --no-playlist -o "${filePath}" "${url}"`;
-                        exec(fallbackCmd, async (e2) => {
-                            if (e2) {
-                                await socketInstance.sendMessage(from, { text: "❌ Failed to download. Link might be private or invalid." });
-                            } else {
-                                await sendVideo();
-                            }
-                        });
-                    } else {
-                        await sendVideo();
-                    }
-
-                    async function sendVideo() {
-                        if (fs.existsSync(filePath)) {
-                            try {
-                                const stream = fs.createReadStream(filePath);
-                                await socketInstance.sendMessage(from, { 
-                                    video: { stream }, 
-                                    caption: "✅ Video downloaded successfully!",
-                                    mimetype: 'video/mp4'
-                                });
-                                addLog(`Video sent to ${from}`);
-                                fs.unlinkSync(filePath);
-                            } catch (e) {
-                                addLog("Send error: " + e.message);
-                            }
-                        }
-                    }
-                });
+                downloadQueue.push({ from, url });
+                addLog(`Link added to queue: ${url} (Queue size: ${downloadQueue.length})`);
+                
+                if (downloadQueue.length > 1) {
+                    await socketInstance.sendMessage(from, { text: `🕒 Link added to queue. Position: ${downloadQueue.length}. Please wait.` });
+                }
+                
+                processQueue();
             }
         });
 
