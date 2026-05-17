@@ -62,8 +62,8 @@ async function useMongoDBAuthState(mongoUrl) {
 
     const { state, saveCreds } = await (async () => {
         const b = await import('@whiskeysockets/baileys');
-        const baileysMod = b.default || b;
-        const creds = await readData('creds') || baileysMod.initCreds();
+        const initCreds = b.initCreds || (b.default && b.default.initCreds);
+        const creds = await readData('creds') || initCreds();
         return {
             state: {
                 creds,
