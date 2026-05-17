@@ -60,9 +60,9 @@ async function startBot() {
         const { state, saveCreds } = await useMongoDBAuthState(MONGO_URL);
         
         const b = await import('@whiskeysockets/baileys');
-        const baileysMod = b.default && b.default.initCreds ? b.default : b;
+        const baileysMod = (b.default && (b.default.initAuthCreds || b.default.initCreds)) ? b.default : b;
         
-        const makeWASocket = baileysMod.default || baileysMod;
+        const makeWASocket = baileysMod.makeWASocket || baileysMod.default || baileysMod;
         const { DisconnectReason, fetchLatestBaileysVersion, Browsers } = baileysMod;
 
         const { version } = await fetchLatestBaileysVersion();

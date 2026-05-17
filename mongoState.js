@@ -63,22 +63,22 @@ async function useMongoDBAuthState(mongoUrl) {
     const { state, saveCreds } = await (async () => {
         const b = await import('@whiskeysockets/baileys');
         
-        // Find initCreds wherever it might be
-        let initCreds = b.initCreds;
+        // Find initAuthCreds (it was renamed from initCreds in newer versions)
+        let initAuthCreds = b.initAuthCreds || b.initCreds;
         let baileysMod = b;
 
-        if (!initCreds && b.default) {
-            initCreds = b.default.initCreds;
+        if (!initAuthCreds && b.default) {
+            initAuthCreds = b.default.initAuthCreds || b.default.initCreds;
             baileysMod = b.default;
         }
 
-        if (typeof initCreds !== 'function') {
+        if (typeof initAuthCreds !== 'function') {
             const keys = Object.keys(b).join(', ');
             const defaultKeys = b.default ? Object.keys(b.default).join(', ') : 'none';
-            throw new Error(`initCreds not found. Module keys: [${keys}], Default keys: [${defaultKeys}]`);
+            throw new Error(`initAuthCreds not found. Module keys: [${keys}], Default keys: [${defaultKeys}]`);
         }
 
-        const creds = await readData('creds') || initCreds();
+        const creds = await readData('creds') || initAuthCreds();
         return {
             state: {
                 creds,
