@@ -37,6 +37,8 @@ let recentLogs = [];
 let socketInstance = null;
 let downloadQueue = [];
 let isProcessingQueue = false;
+let activeDownloads = 0;
+const MAX_CONCURRENT_DOWNLOADS = 2;
 
 // Keep the process alive
 setInterval(() => {}, 1000 * 60 * 60); 
@@ -50,15 +52,18 @@ function addLog(message) {
 }
 
 async function processQueue() {
-    if (isProcessingQueue || downloadQueue.length === 0) return;
-    isProcessingQueue = true;
-
-    while (downloadQueue.length > 0) {
+    if (isProcessingQueue && activeDownloads >= MAX_CONCURRENT_DOWNLOADS) return;
+    
+    while (downloadQueue.length > 0 && activeDownloads < MAX_CONCURRENT_DOWNLOADS) {
         const { from, url } = downloadQueue.shift();
-        addLog(`Processing queued link: ${url}`);
+        activeDownloads++;
+        isProcessingQueue = true;
+        
+        const startTime = Date.now();
+        addLog(`[${new Date().toLocaleTimeString()}] Starting download: ${url}`);
         
         try {
-            await socketInstance.sendMessage(from, { text: "📥 Currently downloading your video... (Queued)" });
+            await socketInstance.sendMessage(from, { text: "📥 Downloading your video now..." });
 
             const fileName = `video_${Date.now()}.mp4`;
             const filePath = path.join(__dirname, fileName);
@@ -93,7 +98,8 @@ async function processQueue() {
                                     caption: "✅ Video downloaded successfully!",
                                     mimetype: 'video/mp4'
                                 });
-                                addLog(`Video sent to ${from}`);
+                                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                                addLog(`[${new Date().toLocaleTimeString()}] Video sent to ${from} (took ${elapsed}s)`);
                                 fs.unlinkSync(filePath);
                             } catch (e) {
                                 addLog("Send error: " + e.message);
@@ -104,13 +110,15 @@ async function processQueue() {
             });
         } catch (err) {
             addLog("Queue processing error: " + err.message);
+        } finally {
+            activeDownloads--;
+            addLog(`[${new Date().toLocaleTimeString()}] Queue size: ${downloadQueue.length}, Active downloads: ${activeDownloads}`);
         }
-        
-        // Brief pause between downloads to prevent resource spikes
-        await new Promise(r => setTimeout(r, 2000));
     }
-
-    isProcessingQueue = false;
+    
+    if (downloadQueue.length === 0 && activeDownloads === 0) {
+        isProcessingQueue = false;
+    }
 }
 
 async function startBot() {
