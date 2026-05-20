@@ -211,7 +211,10 @@ async function startBot() {
                 downloadQueue.push({ from, url });
                 addLog(`Link added to queue: ${url} (Queue size: ${downloadQueue.length})`);
                 
-                if (downloadQueue.length > 1) {
+                // Always send immediate acknowledgment
+                if (downloadQueue.length === 1) {
+                    await socketInstance.sendMessage(from, { text: "📥 Download started! Please wait..." });
+                } else {
                     await socketInstance.sendMessage(from, { text: `🕒 Link added to queue. Position: ${downloadQueue.length}. Please wait.` });
                 }
                 
