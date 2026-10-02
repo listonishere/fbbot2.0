@@ -46,7 +46,7 @@ let socketInstance = null;
 let downloadQueue = [];
 let isProcessingQueue = false;
 let queueItemCounter = 0;
-const MAX_CONCURRENT_DOWNLOADS = 1; // Strict 1-by-1 sequential downloading
+const MAX_CONCURRENT_DOWNLOADS = 1;
 
 function addLog(message) {
     const log = { time: new Date().toLocaleTimeString(), message };
@@ -88,6 +88,27 @@ function extractAllUrls(text) {
     return matches.map(cleanUrl).filter((url) => url.length > 8);
 }
 
+// Convert any video to 100% WhatsApp-compliant MP4 (H.264 + AAC + YUV420P + Faststart)
+function transcodeForWhatsApp(rawPath, outputPath) {
+    return new Promise((resolve, reject) => {
+        const ffmpegCmd = `ffmpeg -y -i "${rawPath}" -c:v libx264 -preset veryfast -crf 22 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:a aac -b:a 128k -ar 44100 -movflags +faststart "${outputPath}"`;
+        exec(ffmpegCmd, { maxBuffer: 1024 * 1024 * 20 }, (err) => {
+            if (err) {
+                // If transcode fails, check if raw file exists as fallback
+                if (fs.existsSync(rawPath)) {
+                    resolve(rawPath);
+                } else {
+                    reject(err);
+                }
+            } else if (fs.existsSync(outputPath)) {
+                resolve(outputPath);
+            } else {
+                resolve(rawPath);
+            }
+        });
+    });
+}
+
 async function processQueue() {
     if (isProcessingQueue) return;
     isProcessingQueue = true;
@@ -101,30 +122,21 @@ async function processQueue() {
         const batchInfo = totalInBatch > 1 ? ` [${batchIndex}/${totalInBatch}]` : "";
         addLog(`▶️ [Queue Item #${id}]${batchInfo} Starting download: ${url} (${remaining} remaining in queue)`);
 
-        const fileName = `video_${Date.now()}_${id}.mp4`;
-        const filePath = path.join(__dirname, fileName);
+        const rawFileName = `raw_${Date.now()}_${id}.mp4`;
+        const readyFileName = `ready_${Date.now()}_${id}.mp4`;
+        const rawPath = path.join(__dirname, rawFileName);
+        const readyPath = path.join(__dirname, readyFileName);
         const ytDlpPath = process.platform === "win32" ? ".\\yt-dlp.exe" : "yt-dlp";
 
         try {
-            // Send starting message to user for this item
-            if (socketInstance) {
-                try {
-                    await socketInstance.sendMessage(
-                        from,
-                        { text: `📥 Downloading link${batchInfo}...\n🔗 ${url}` },
-                        { quoted: quotedMsg }
-                    );
-                } catch (e) {}
-            }
-
-            // High quality merged format with fallback
-            const command = `${ytDlpPath} -f "bv*+ba/b" --merge-output-format mp4 --no-playlist --no-warnings -o "${filePath}" "${url}"`;
+            // High quality download with yt-dlp
+            const command = `${ytDlpPath} -f "bv*+ba/b" --merge-output-format mp4 --no-playlist --no-warnings -o "${rawPath}" "${url}"`;
 
             await new Promise((resolve) => {
                 exec(command, { maxBuffer: 1024 * 1024 * 20 }, async (error) => {
                     if (error) {
                         addLog(`Standard download failed for #${id} (${error.message}). Trying fallback format...`);
-                        const fallbackCmd = `${ytDlpPath} -f "mp4/best" --no-playlist --no-warnings -o "${filePath}" "${url}"`;
+                        const fallbackCmd = `${ytDlpPath} -f "mp4/best" --no-playlist --no-warnings -o "${rawPath}" "${url}"`;
 
                         exec(fallbackCmd, { maxBuffer: 1024 * 1024 * 20 }, async (err2) => {
                             if (err2) {
@@ -138,19 +150,20 @@ async function processQueue() {
                                         );
                                     } catch (e) {}
                                 }
+                                resolve();
                             } else {
-                                await sendVideoResult();
+                                await handleTranscodeAndSend();
+                                resolve();
                             }
-                            resolve();
                         });
                     } else {
-                        await sendVideoResult();
+                        await handleTranscodeAndSend();
                         resolve();
                     }
 
-                    async function sendVideoResult() {
-                        if (!fs.existsSync(filePath)) {
-                            addLog(`File not found on disk for #${id}: ${filePath}`);
+                    async function handleTranscodeAndSend() {
+                        if (!fs.existsSync(rawPath)) {
+                            addLog(`Raw file not found for #${id}`);
                             if (socketInstance) {
                                 await socketInstance.sendMessage(
                                     from,
@@ -161,12 +174,20 @@ async function processQueue() {
                             return;
                         }
 
+                        addLog(`Transcoding video #${id} with FFmpeg for WhatsApp compatibility...`);
+                        let finalPath = rawPath;
                         try {
-                            const stats = fs.statSync(filePath);
+                            finalPath = await transcodeForWhatsApp(rawPath, readyPath);
+                        } catch (e) {
+                            addLog(`Transcode warning for #${id}: ${e.message}. Using raw file.`);
+                        }
+
+                        try {
+                            const stats = fs.statSync(finalPath);
                             const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
                             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
-                            addLog(`File downloaded for #${id}: ${fileSizeMB}MB in ${elapsed}s. Sending to chat...`);
+                            addLog(`Video ready for #${id}: ${fileSizeMB}MB in ${elapsed}s. Sending to chat...`);
 
                             const queueNote = remaining > 0 ? `\n⏳ ${remaining} item(s) left in queue.` : "";
 
@@ -177,7 +198,7 @@ async function processQueue() {
                                     { quoted: quotedMsg }
                                 );
                             } else if (stats.size > 64 * 1024 * 1024) {
-                                const videoBuffer = fs.readFileSync(filePath);
+                                const videoBuffer = fs.readFileSync(finalPath);
                                 await socketInstance.sendMessage(
                                     from,
                                     {
@@ -190,7 +211,7 @@ async function processQueue() {
                                 );
                                 addLog(`Video #${id} sent as document to ${from} (${elapsed}s)`);
                             } else {
-                                const videoBuffer = fs.readFileSync(filePath);
+                                const videoBuffer = fs.readFileSync(finalPath);
                                 await socketInstance.sendMessage(
                                     from,
                                     {
@@ -222,19 +243,17 @@ async function processQueue() {
         } finally {
             // Clean up files immediately after each download
             try {
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                }
+                if (fs.existsSync(rawPath)) fs.unlinkSync(rawPath);
+                if (fs.existsSync(readyPath)) fs.unlinkSync(readyPath);
                 const dirFiles = fs.readdirSync(__dirname);
                 for (const f of dirFiles) {
-                    if (f.startsWith(fileName) && f.endsWith(".part")) {
+                    if ((f.startsWith(rawFileName) || f.startsWith(readyFileName)) && f.endsWith(".part")) {
                         try { fs.unlinkSync(path.join(__dirname, f)); } catch (e) {}
                     }
                 }
             } catch (e) {}
 
             addLog(`Completed #${id}. Remaining in queue: ${downloadQueue.length}`);
-            // Small pause between downloads to preserve network stability
             await new Promise((r) => setTimeout(r, 1500));
         }
     }
@@ -358,7 +377,7 @@ async function startBot() {
                     continue;
                 }
 
-                // Extract all URLs from the message (supports 1 link or 100 links in batch)
+                // Extract all URLs from the message
                 const urls = extractAllUrls(text);
                 if (urls.length === 0) continue;
 
@@ -386,13 +405,13 @@ async function startBot() {
                         if (!isProcessingQueue && totalQueued === 1) {
                             await socketInstance.sendMessage(
                                 from,
-                                { text: "📥 Link received! Starting download 1 by 1..." },
+                                { text: "📥 Link received! Downloading now..." },
                                 { quoted: msg }
                             );
                         } else {
                             await socketInstance.sendMessage(
                                 from,
-                                { text: `🕒 Link added to queue (Position #${totalQueued}). It will download 1 by 1.` },
+                                { text: `🕒 Link added to queue (Position #${totalQueued}). Downloading 1 by 1.` },
                                 { quoted: msg }
                             );
                         }
