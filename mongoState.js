@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+const dns = require('dns');
+try {
+    dns.setDefaultResultOrder('ipv4first');
+} catch (e) {}
 
 const AuthSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
@@ -20,8 +24,15 @@ async function useMongoDBAuthState(mongoUrl) {
             await mongoose.connect(mongoUrl);
             console.log("Connected to MongoDB");
         } catch (err) {
-            console.error("MongoDB connection error:", err);
-            throw err;
+            console.error("MongoDB connection error (retrying with DNS fallback):", err.message);
+            try {
+                dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+                await mongoose.connect(mongoUrl);
+                console.log("Connected to MongoDB using DNS fallback");
+            } catch (retryErr) {
+                console.error("MongoDB connection fallback error:", retryErr);
+                throw retryErr;
+            }
         }
     }
 
@@ -135,4 +146,24 @@ async function setSetting(key, value) {
     await SettingModel.findOneAndUpdate({ key }, { value }, { upsert: true });
 }
 
-module.exports = { useMongoDBAuthState, getSetting, setSetting };
+async function clearAuths() {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            const MONGO_URL = process.env.MONGO_URL;
+            if (MONGO_URL) {
+                try {
+                    await mongoose.connect(MONGO_URL);
+                } catch (e) {
+                    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+                    await mongoose.connect(MONGO_URL);
+                }
+            }
+        }
+        await AuthModel.deleteMany({});
+    } catch (e) {
+        console.error("Error clearing auths:", e);
+        throw e;
+    }
+}
+
+module.exports = { useMongoDBAuthState, getSetting, setSetting, clearAuths };

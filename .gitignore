@@ -12,6 +12,6 @@ keys.txt
 .gemini
 package-lock.json
 final_check.log
-bot_output.log
-startup_error.log
 test_regex.js
+settings.json
+yt-dlp.exe.old

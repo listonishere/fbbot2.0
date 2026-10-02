@@ -3,68 +3,125 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bot Dashboard</title>
+    <title>WhatsApp Bot Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; background: #0f172a; color: #f8fafc; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
-        .glow-green { box-shadow: 0 0 15px #10b981; }
-        .glow-red { box-shadow: 0 0 15px #ef4444; }
-        .pairing-font { font-family: 'Orbitron', sans-serif; letter-spacing: 0.2rem; }
+        body { font-family: 'Inter', sans-serif; background: #0b0f19; color: #f1f5f9; }
+        .glass { background: rgba(17, 24, 39, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .glow-green { box-shadow: 0 0 20px rgba(16, 185, 129, 0.4); }
+        .glow-yellow { box-shadow: 0 0 20px rgba(245, 158, 11, 0.4); }
+        .glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
+        .pairing-font { font-family: 'Orbitron', monospace; letter-spacing: 0.35rem; }
     </style>
 </head>
-<body class="min-h-screen flex items-center justify-center p-4">
-    <div class="max-w-4xl w-full glass rounded-3xl p-8 space-y-8">
+<body class="min-h-screen flex items-center justify-center p-4 md:p-8">
+    <div class="max-w-4xl w-full glass rounded-3xl p-6 md:p-8 space-y-6 shadow-2xl">
         <!-- Header -->
-        <div class="flex justify-between items-center">
-            <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">Bot Dashboard</h1>
-            <div id="status-indicator" class="flex items-center space-x-2 px-4 py-2 rounded-full glass">
-                <div id="status-dot" class="w-3 h-3 rounded-full bg-red-500"></div>
-                <span id="status-text" class="font-semibold text-sm">Offline</span>
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/10 pb-5">
+            <div>
+                <h1 class="text-2xl md:text-3xl font-bold bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">
+                    WhatsApp Media Downloader
+                </h1>
+                <p class="text-xs text-slate-400 mt-1">Local Server & Sequential 1-by-1 Link Downloader</p>
+            </div>
+            <div class="flex items-center space-x-3">
+                <div id="queue-badge" class="flex items-center space-x-2 px-3 py-1.5 rounded-full glass border border-blue-500/30 text-blue-300 text-xs font-semibold">
+                    <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+                    <span>Queue: <strong id="queue-count" class="text-white">0</strong></span>
+                </div>
+                <div id="status-badge" class="flex items-center space-x-2.5 px-4 py-2 rounded-full glass glow-yellow">
+                    <div id="status-dot" class="w-3 h-3 rounded-full bg-amber-400 animate-pulse"></div>
+                    <span id="status-text" class="font-semibold text-sm text-slate-200">Starting...</span>
+                </div>
             </div>
         </div>
 
-        <!-- Pairing Code Section -->
-        <div id="pairing-section" class="hidden glass rounded-2xl p-6 text-center space-y-4">
-            <h2 class="text-blue-400 font-semibold">PAIRED ACTION REQUIRED</h2>
-            <p class="text-sm text-gray-400 text-slate-400">Enter this code on your device to link the bot:</p>
-            <div id="pairing-code" class="text-5xl font-bold pairing-font py-4 text-white">---- ----</div>
+        <!-- Pairing Code Banner (Active when pairing) -->
+        <div id="pairing-section" class="hidden glass border border-amber-500/30 rounded-2xl p-6 text-center space-y-4 bg-amber-500/5">
+            <div class="inline-flex items-center space-x-2 px-3 py-1 bg-amber-500/20 text-amber-300 text-xs font-semibold rounded-full uppercase tracking-wider">
+                <span>Pairing Required</span>
+            </div>
+            <p class="text-sm text-slate-300 max-w-lg mx-auto">
+                Open WhatsApp on your phone &rarr; <strong>Settings / Linked Devices</strong> &rarr; <strong>Link a Device</strong> &rarr; <strong>Link with phone number instead</strong>, then enter:
+            </p>
+            <div class="flex items-center justify-center space-x-3">
+                <div id="pairing-code" class="text-3xl md:text-5xl font-extrabold pairing-font text-emerald-400 bg-slate-900/90 px-6 py-4 rounded-xl border border-emerald-500/30 select-all tracking-widest shadow-inner">
+                    --------
+                </div>
+                <button onclick="copyPairingCode()" title="Copy Code" class="p-4 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-xl border border-emerald-500/30 transition-all">
+                    📋
+                </button>
+            </div>
+            <p id="copy-msg" class="text-xs text-emerald-400 hidden font-medium">Copied to clipboard!</p>
         </div>
 
-        <!-- Main Content Grid -->
+        <!-- Main Grid -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <!-- Stats -->
-            <div class="glass rounded-2xl p-6 space-y-4">
-                <h3 class="text-lg font-semibold text-purple-400">Settings & Info</h3>
-                <div class="space-y-2 text-sm">
-                    <div class="flex justify-between border-b border-white/10 pb-2">
-                        <span class="text-slate-400">Uptime</span>
-                        <span id="uptime">Loading...</span>
+            <!-- Left: Settings & Control -->
+            <div class="glass rounded-2xl p-6 space-y-5">
+                <h3 class="text-base font-semibold text-slate-200 flex items-center space-x-2">
+                    <span>⚙️</span>
+                    <span>Pair WhatsApp Number</span>
+                </h3>
+
+                <div class="space-y-3">
+                    <div>
+                        <label class="text-xs text-slate-400 font-medium block mb-1">WhatsApp Phone Number (with Country Code)</label>
+                        <input 
+                            type="text" 
+                            id="phone-input" 
+                            placeholder="e.g. 233559871135 or 1234567890" 
+                            class="w-full bg-slate-900/70 border border-white/15 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-all font-mono text-sm"
+                        >
+                        <p class="text-[11px] text-slate-500 mt-1">Digits only (no '+' sign, no spaces).</p>
                     </div>
-                    <div class="flex justify-between border-b border-white/10 pb-2">
-                        <span class="text-slate-400">Engine</span>
-                        <span>Baileys + vt-dlp</span>
-                    </div>
-                </div>
-                <div class="space-y-4 pt-4">
-                    <div class="space-y-1">
-                        <label class="text-xs text-slate-500 uppercase font-bold px-1">Pairing Phone Number</label>
-                        <input type="text" id="phone-input" placeholder="e.g. 233559871135" class="w-full bg-slate-900/50 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500/50 transition-all">
-                    </div>
-                    <button onclick="resetSession()" class="w-full py-3 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 font-bold rounded-xl transition-all border border-blue-500/30">
-                        Switch New Number
+
+                    <button 
+                        id="pair-btn"
+                        onclick="pairNewNumber()" 
+                        class="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2"
+                    >
+                        <span>🔗</span>
+                        <span>Pair WhatsApp Number</span>
                     </button>
-                    <p class="text-[10px] text-center text-slate-500">Wait 5-10 seconds after clicking for the code to appear.</p>
+                </div>
+
+                <div class="border-t border-white/10 pt-4 space-y-2 text-xs text-slate-400">
+                    <div class="flex justify-between py-1">
+                        <span>Mode</span>
+                        <span class="text-emerald-400 font-medium">Sequential 1-by-1 Queue (100+ items)</span>
+                    </div>
+                    <div class="flex justify-between py-1">
+                        <span>Supported Links</span>
+                        <span class="text-slate-300 font-medium">IG, TikTok, FB, YT, X, Reddit +</span>
+                    </div>
+                    <div class="flex justify-between py-1">
+                        <span>Engine</span>
+                        <span class="text-slate-300 font-medium">Baileys + yt-dlp</span>
+                    </div>
+                    <div class="flex justify-between py-1">
+                        <span>Local Server</span>
+                        <span class="text-emerald-400 font-mono font-medium">Online (Port 10000)</span>
+                    </div>
                 </div>
             </div>
 
-            <!-- Logs -->
-            <div class="glass rounded-2xl p-6 flex flex-col h-[350px]">
-                <h3 class="text-lg font-semibold text-blue-400 mb-4">Live Logs</h3>
-                <div id="logs-container" class="flex-1 overflow-y-auto space-y-2 text-xs font-mono scroll-smooth">
-                    <!-- Logs will appear here -->
+            <!-- Right: Live Logs -->
+            <div class="glass rounded-2xl p-6 flex flex-col h-[380px]">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-base font-semibold text-slate-200 flex items-center space-x-2">
+                        <span>📜</span>
+                        <span>Live Activity</span>
+                    </h3>
+                    <button onclick="clearLogDisplay()" class="text-xs text-slate-400 hover:text-slate-200 transition-colors">
+                        Clear
+                    </button>
+                </div>
+                <div id="logs-container" class="flex-1 overflow-y-auto space-y-1.5 text-xs font-mono scroll-smooth pr-1">
+                    <div class="text-slate-500 italic">Connecting to live log stream...</div>
                 </div>
             </div>
         </div>
@@ -72,20 +129,39 @@
 
     <script>
         const socket = io();
+        const statusBadge = document.getElementById("status-badge");
         const statusDot = document.getElementById("status-dot");
         const statusText = document.getElementById("status-text");
         const pairingSection = document.getElementById("pairing-section");
         const pairingCode = document.getElementById("pairing-code");
         const logsContainer = document.getElementById("logs-container");
         const phoneInput = document.getElementById("phone-input");
+        const queueCount = document.getElementById("queue-count");
 
         socket.on("status_update", (status) => {
             statusText.innerText = status;
             if (status === "Online") {
-                statusDot.className = "w-3 h-3 rounded-full bg-green-500 glow-green";
+                statusDot.className = "w-3 h-3 rounded-full bg-emerald-400";
+                statusBadge.className = "flex items-center space-x-2.5 px-4 py-2 rounded-full glass glow-green";
                 pairingSection.classList.add("hidden");
+            } else if (status === "Pairing") {
+                statusDot.className = "w-3 h-3 rounded-full bg-amber-400 animate-pulse";
+                statusBadge.className = "flex items-center space-x-2.5 px-4 py-2 rounded-full glass glow-yellow";
             } else {
-                statusDot.className = "w-3 h-3 rounded-full bg-red-500 glow-red";
+                statusDot.className = "w-3 h-3 rounded-full bg-rose-500";
+                statusBadge.className = "flex items-center space-x-2.5 px-4 py-2 rounded-full glass glow-red";
+            }
+        });
+
+        socket.on("queue_update", (data) => {
+            if (queueCount) {
+                queueCount.innerText = data.length || 0;
+            }
+        });
+
+        socket.on("phone_number", (phone) => {
+            if (phone && !phoneInput.value) {
+                phoneInput.value = phone;
             }
         });
 
@@ -100,36 +176,61 @@
 
         socket.on("log_update", (logs) => {
             logsContainer.innerHTML = logs.map(log => `
-                <div class="border-l-2 border-blue-500/30 pl-2 py-1">
+                <div class="border-l-2 border-emerald-500/40 pl-2 py-0.5">
                     <span class="text-slate-500">[${log.time}]</span>
-                    <span class="text-slate-200">${log.message}</span>
+                    <span class="text-slate-300 ml-1">${log.message}</span>
                 </div>
             `).join("");
+            logsContainer.scrollTop = 0;
         });
 
-        async function resetSession() {
-            const phoneNumber = phoneInput.value.trim();
-            if (!phoneNumber) {
-                alert("Please enter a phone number first.");
+        function clearLogDisplay() {
+            logsContainer.innerHTML = `<div class="text-slate-500 italic">Logs cleared. Waiting for new events...</div>`;
+        }
+
+        function copyPairingCode() {
+            const code = pairingCode.innerText.trim();
+            if (code && code !== "--------") {
+                navigator.clipboard.writeText(code);
+                const msg = document.getElementById("copy-msg");
+                msg.classList.remove("hidden");
+                setTimeout(() => msg.classList.add("hidden"), 3000);
+            }
+        }
+
+        async function pairNewNumber() {
+            const rawPhone = phoneInput.value.trim();
+            const phoneNumber = rawPhone.replace(/[^0-9]/g, "");
+            
+            if (!phoneNumber || phoneNumber.length < 7) {
+                alert("Please enter a valid WhatsApp phone number with country code (e.g. 233559871135).");
                 return;
             }
 
-            if (confirm(`Are you sure you want to switch to ${phoneNumber}? This will disconnect the current bot and clear the session.`)) {
-                try {
-                    const response = await fetch("/api/reset", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ phoneNumber })
-                    });
-                    if (response.ok) {
-                        alert("Resetting... The dashboard will reload and generate a new code shortly.");
-                        setTimeout(() => location.reload(), 2000);
-                    } else {
-                        alert("Error resetting session.");
-                    }
-                } catch (e) {
-                    alert("Network error. Please try again.");
+            const btn = document.getElementById("pair-btn");
+            btn.disabled = true;
+            btn.innerText = "Requesting Pairing Code...";
+
+            try {
+                const response = await fetch("/api/reset", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ phoneNumber })
+                });
+
+                if (response.ok) {
+                    pairingSection.classList.remove("hidden");
+                    pairingCode.innerText = "GENERATING...";
+                } else {
+                    alert("Error requesting pairing code.");
                 }
+            } catch (e) {
+                alert("Connection error. Make sure the local server is running.");
+            } finally {
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = "<span>🔗</span><span>Pair WhatsApp Number</span>";
+                }, 5000);
             }
         }
     </script>
