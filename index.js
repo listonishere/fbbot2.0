@@ -88,13 +88,13 @@ function extractAllUrls(text) {
     return matches.map(cleanUrl).filter((url) => url.length > 8);
 }
 
-// Convert any video to 100% WhatsApp-compliant MP4 (H.264 + AAC + YUV420P + Faststart)
+// Convert video to optimized, lightweight WhatsApp MP4 (Max 720p/480p, H.264 + AAC + YUV420P + Faststart)
 function transcodeForWhatsApp(rawPath, outputPath) {
     return new Promise((resolve, reject) => {
-        const ffmpegCmd = `ffmpeg -y -i "${rawPath}" -c:v libx264 -preset veryfast -crf 22 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:a aac -b:a 128k -ar 44100 -movflags +faststart "${outputPath}"`;
+        // Caps resolution to max 720p/480p and uses CRF 24 for small file size and high playback compatibility
+        const ffmpegCmd = `ffmpeg -y -i "${rawPath}" -vf "scale='min(1280,iw)':-2,scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 24 -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -movflags +faststart "${outputPath}"`;
         exec(ffmpegCmd, { maxBuffer: 1024 * 1024 * 20 }, (err) => {
             if (err) {
-                // If transcode fails, check if raw file exists as fallback
                 if (fs.existsSync(rawPath)) {
                     resolve(rawPath);
                 } else {
@@ -129,14 +129,14 @@ async function processQueue() {
         const ytDlpPath = process.platform === "win32" ? ".\\yt-dlp.exe" : "yt-dlp";
 
         try {
-            // High quality download with yt-dlp
-            const command = `${ytDlpPath} -f "bv*+ba/b" --merge-output-format mp4 --no-playlist --no-warnings -o "${rawPath}" "${url}"`;
+            // Target 720p/480p resolution to keep download small and fast
+            const command = `${ytDlpPath} -f "bv*[height<=720]+ba/b[height<=720]/best[height<=720]/best" -S "res:720,ext:mp4:m4a" --merge-output-format mp4 --no-playlist --no-warnings -o "${rawPath}" "${url}"`;
 
             await new Promise((resolve) => {
                 exec(command, { maxBuffer: 1024 * 1024 * 20 }, async (error) => {
                     if (error) {
                         addLog(`Standard download failed for #${id} (${error.message}). Trying fallback format...`);
-                        const fallbackCmd = `${ytDlpPath} -f "mp4/best" --no-playlist --no-warnings -o "${rawPath}" "${url}"`;
+                        const fallbackCmd = `${ytDlpPath} -f "best[height<=720]/best" --no-playlist --no-warnings -o "${rawPath}" "${url}"`;
 
                         exec(fallbackCmd, { maxBuffer: 1024 * 1024 * 20 }, async (err2) => {
                             if (err2) {
@@ -174,7 +174,7 @@ async function processQueue() {
                             return;
                         }
 
-                        addLog(`Transcoding video #${id} with FFmpeg for WhatsApp compatibility...`);
+                        addLog(`Optimizing video #${id} (max 720p/480p)...`);
                         let finalPath = rawPath;
                         try {
                             finalPath = await transcodeForWhatsApp(rawPath, readyPath);
@@ -216,7 +216,7 @@ async function processQueue() {
                                     from,
                                     {
                                         video: videoBuffer,
-                                        caption: `✅ Video downloaded successfully!${batchInfo}${queueNote}`,
+                                        caption: `✅ Video downloaded successfully! (${fileSizeMB}MB)${batchInfo}${queueNote}`,
                                         mimetype: "video/mp4"
                                     },
                                     { quoted: quotedMsg }
@@ -241,7 +241,6 @@ async function processQueue() {
         } catch (err) {
             addLog(`Queue item #${id} error: ${err.message}`);
         } finally {
-            // Clean up files immediately after each download
             try {
                 if (fs.existsSync(rawPath)) fs.unlinkSync(rawPath);
                 if (fs.existsSync(readyPath)) fs.unlinkSync(readyPath);
@@ -372,12 +371,10 @@ async function startBot() {
                 const text = extractTextFromMessage(msg).trim();
                 if (!text) continue;
 
-                // Ignore automated status messages from the bot to avoid echo loops
                 if (text.startsWith("📥") || text.startsWith("🕒") || text.startsWith("✅") || text.startsWith("❌") || text.startsWith("⚠️") || text.startsWith("▶️")) {
                     continue;
                 }
 
-                // Extract all URLs from the message
                 const urls = extractAllUrls(text);
                 if (urls.length === 0) continue;
 
@@ -399,13 +396,12 @@ async function startBot() {
                 const totalQueued = downloadQueue.length;
                 addLog(`Queued ${urls.length} link(s). Total queue size: ${totalQueued}`);
 
-                // Send immediate queue acknowledgement to the user
                 try {
                     if (urls.length === 1) {
                         if (!isProcessingQueue && totalQueued === 1) {
                             await socketInstance.sendMessage(
                                 from,
-                                { text: "📥 Link received! Downloading now..." },
+                                { text: "📥 Link received! Downloading in 480p/720p..." },
                                 { quoted: msg }
                             );
                         } else {
@@ -418,7 +414,7 @@ async function startBot() {
                     } else {
                         await socketInstance.sendMessage(
                             from,
-                            { text: `📋 Queued ${urls.length} links! Downloading 1 by 1 sequentially. (Total queue: ${totalQueued})` },
+                            { text: `📋 Queued ${urls.length} links! Downloading 1 by 1 in optimized quality (480p/720p). (Total queue: ${totalQueued})` },
                             { quoted: msg }
                         );
                     }
@@ -426,7 +422,6 @@ async function startBot() {
                     addLog("Queue acknowledgement error: " + e.message);
                 }
 
-                // Trigger queue processing
                 processQueue();
             }
         });
